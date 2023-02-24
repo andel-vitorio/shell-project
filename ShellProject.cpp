@@ -19,6 +19,8 @@
 #include <unistd.h>
 #include <sstream>
 #include <regex>
+#include <iomanip>
+#include <map>
 
 
 // Código de cores ANSI
@@ -28,6 +30,47 @@ static const std::string ANSI_COLOR_CYAN = "\x1b[36m";
 static const std::string ANSI_COLOR_WHITE = "\x1b[37m";
 static const std::string ANSI_COLOR_RESET = "\x1b[0m";
 
+
+struct CommandArgsDescription {
+    std::string name;
+    std::string description;
+
+    CommandArgsDescription(std::string name, std::string description) {
+        this->name = name;
+        this->description = description;
+    }
+};
+
+/// @brief Dicionário contendo pequenas descrições dos comandos disponíveis.
+static std::map<std::string, std::string> helpDictionary = {
+    { "quit", "Finaliza o shell" },
+    { "help", "Exibe as informações dos comandos ou de um comando específico" },
+    { "exit", "Finaliza o shell" },
+    { "echo", "Exibe uma mensagem na tela" }
+};
+
+/// @brief Dicionário contendo descrições completas dos comandos disponíveis.
+static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescription = {
+    { 
+        "quit", 
+        {{ "quit", "Finaliza o processo do shell atual" }} 
+    },
+    { 
+        "exit", 
+        {{ "exit", "Finaliza o processo do shell atual" }} 
+    },
+    {
+        "help",
+        { 
+            { "help", "Exibe as informações dos comandos disponíveis" },
+            { "help <nome_do_comando>", "Exibe as informações de um comando específico" } 
+        }
+    },
+    {
+        "echo",
+        {{ "echo <texto>", "Exibe uma texto na tela" }}
+    }
+};
 
 /**
  * Remove os espaços em branco do início e fim
@@ -96,6 +139,30 @@ namespace Runner {
     std::string getCurrentDirectory() {
         return get_current_dir_name();
     }
+
+    /**
+     * Obtém a descrição de um comando específico.
+     * 
+     * @return A descrição do comando.
+    */
+    std::string getCommandDescription(std::string name) {
+        std::stringstream ss;
+
+        auto args = cmdArgsDescription[name];
+
+        if ( !args.empty() ) {
+            ss << "COMANDO:\n" << name << "\n\n";
+            ss << "DESCRIÇÃO:\n" << helpDictionary[name] << "\n\n";
+            ss << "USO:\n";
+
+            for ( auto & arg: args ) {
+                ss << " - " << std::left << std::setw(32);
+                ss << arg.name << arg.description << '\n';
+            }
+        } else ss << "Comando não encontrado: " << name;
+
+        return ss.str();
+    }
     
 }
 /**
@@ -108,15 +175,16 @@ class Shell {
     private:
 
     /**
-     * Obtém argumento do comando 'echo' a partir de um texto.
+     * Obtém o(s) argumento(s) de um comando a partir de um texto.
      * 
-     * @param[in] text O texto com o comando 'echo' e seu parâmetro.
-     * @return O argumento do comando 'echo'. 
+     * @param[in] command O nome do comando.
+     * @param[in] text O texto com o comando e o(s) seu(s) parâmetro(s).
+     * @return Os argumentos. 
     */
-    std::string getEchoArg(std::string text) {
+    std::string getArgs(const std::string & command, std::string & text) {
         std::string arg;
 
-        size_t pos = text.find("echo");
+        size_t pos = text.find(command);
 
         if ( pos != std::string::npos )
             text.erase(pos, 4);
@@ -141,6 +209,20 @@ class Shell {
             "Bem vindo ao Shell Project!\n" +
             "Digite \"exit\" ou \"quit\" para sair."
         );
+    }
+
+    std::string getHelpText() {
+        std::stringstream ss;
+
+        ss << "Para obter mais informações sobre um comando específico, ";
+        ss << "digite: help <nome_do_comando>.\n\n";
+
+        for ( auto it = helpDictionary.begin(); it != helpDictionary.end(); ++it ) {
+            ss << std::left << std::setw(16);
+            ss << it->first << it->second << '\n';
+        }
+
+        return ss.str();
     }
 
 
@@ -178,9 +260,20 @@ class Shell {
         if ( std::regex_match(text, std::regex("(\\s*)(exit|quit)(\\s*)")) )
             isRunning = false;
 
+        // Comando de ajuda
+        else if ( std::regex_match(text, std::regex("(\\s*)(help)(\\s*)")) ) {
+            Runner::display(getHelpText());
+        }
+
+        // Comando de ajuda
+        else if ( std::regex_match(text, std::regex("(\\s*)(help)(\\s*)(.*)")) ) {
+            std::string cmd = getArgs("help", text);
+            Runner::display(Runner::getCommandDescription(cmd));
+        }
+
         // Comando para mostrar um texto
         else if ( std::regex_match(text, std::regex("(\\s*)(echo)(\\s*)(.*)")) ) {
-            Runner::display(getEchoArg(text));
+            Runner::display(getArgs("echo", text));
         } 
         
         // Quando não é possível obter o comando do texto

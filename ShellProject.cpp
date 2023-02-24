@@ -2,13 +2,13 @@
  * Shell Project
  * 
  * Criação:         23 Fev 2023
- * Atualização:     23 Fev 2023
+ * Atualização:     24 Fev 2023
  * Compiladores:    [Linux SO]  g++ (Ubuntu 11.3.0-1ubuntu1~22.04) 11.3.0
  * 
  * Descrição:       Implementação de um Shell.
  * 
  * @author Andevaldo Vitório
- * @version 1.0, 2023-02-23
+ * @version 1.1, 2023-02-24
  *                  
 */
 
@@ -17,6 +17,7 @@
 #include <vector>
 #include <limits.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sstream>
 #include <regex>
 #include <iomanip>
@@ -47,6 +48,7 @@ static std::map<std::string, std::string> helpDictionary = {
     { "echo", "Exibe uma mensagem na tela" },
     { "cd", "Altera o diretório atual" },
     { "pwd", "Exibe o diretório atual" },
+    { "ls", "Exibe os itens presente no diretório atual" },
     { "quit", "Finaliza o shell" },
     { "exit", "Finaliza o shell" }
 };
@@ -79,6 +81,15 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "pwd",
         {{ "pwd", "Exibe o diretório atual" }}
+    },
+    {
+        "ls",
+        {
+            {"ls", "Exibe os itens não ocultos presentes no diretório atual" },
+            {"ls -a", "Exibe todos os itens presentes no diretório atual, inclusive os ocultos" },
+            {"ls -l", "Exibe os itens não ocultos presentes no diretório atual em forma de lista" },
+            {"ls -la", "Exibe todos os itens presentes no diretório atual, inclusive os ocultos, em forma de lista" },
+        }
     }
 };
 
@@ -161,6 +172,42 @@ namespace Runner {
         return chdir(path.c_str());
     }
 
+
+    // Função auxiliar para comparar os valores
+    bool cmp(const dirent * a, const dirent * b) {
+        return (std::string) a->d_name < b->d_name;
+    }
+
+    /**
+     * Altera o diretório atual para um camingo específico.
+     * 
+     * @param[in] path Caminho de destino
+     * @param[in] all Flag que indica para onter todos os itens, inclusive os ocultos.
+     * @return A lista de itens presentes no diretório.
+    */
+    std::vector<dirent *> getItensOfDirectory(const std::string & path, const bool & all = false) {
+        DIR *dir = opendir(path.c_str());
+        dirent *d;
+
+        if ( dir == nullptr )
+             return {}; 
+
+        std::vector<dirent *> dirs;
+
+        while ( (d = readdir(dir)) != nullptr ) {
+            
+            // Se arquivos ocultos são encontrados
+            if ( !all and d->d_name[0] == '.' )
+                continue;
+            
+            dirs.push_back(d);
+        }   
+
+        std::sort(dirs.begin(), dirs.end(), cmp);
+
+        return dirs;
+    }
+
     /**
      * Obtém a descrição de um comando específico.
      * 
@@ -177,7 +224,7 @@ namespace Runner {
             ss << "USO:\n";
 
             for ( auto & arg: args ) {
-                ss << " - " << std::left << std::setw(32);
+                ss << "$ " << std::left << std::setw(32);
                 ss << arg.name << arg.description << '\n';
             }
         } else ss << "Comando não encontrado: " << name;
@@ -317,10 +364,34 @@ class Shell {
         // Comando para exibir o atual diretório
         else if ( std::regex_match(text, std::regex("(\\s*)(pwd)(\\s*)")) )
             Runner::display(Runner::getCurrentDirectory());
+
+            // Comando para exibir o atual diretório
+        else if ( std::regex_match(text, std::regex("(\\s*)(ls)(\\s*)(.*)")) ) {
+            std::string args = getArgs("ls", text);
+            bool a = false, l = false;
+            std::stringstream ss;
+
+            if ( args == "-a") a = true;
+            else if ( args == "-l" ) l = true;
+            else if ( args == "-la" ) a = true, l = true;
+            else if ( !args.empty() ) {
+                Runner::display("Parâmetros inválidos.", 'e');
+                return;
+            }
+
+            for (dirent * d: Runner::getItensOfDirectory(Runner::getCurrentDirectory(), a))
+                ss << d->d_name << (l ?'\n' :'\t');
+
+            if ( ss.str().empty() ) {
+                if (errno == ENOENT) Runner::display("Diretório não encontrado!", 'e');
+                else Runner::display("Leitura do diretório não permitida!", 'e');
+            }
+            
+            Runner::display(ss.str());
+        }
         
         // Quando não é possível obter o comando do texto
-        else Runner::display("Comando inválido: " + text, 'e');
-        
+        else Runner::display("Comando inválido: " + text, 'e');        
     }
 
 };

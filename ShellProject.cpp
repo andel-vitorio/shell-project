@@ -46,6 +46,7 @@ static std::map<std::string, std::string> helpDictionary = {
     { "help", "Exibe as informações dos comandos ou de um comando específico" },
     { "echo", "Exibe uma mensagem na tela" },
     { "cd", "Altera o diretório atual" },
+    { "pwd", "Exibe o diretório atual" },
     { "quit", "Finaliza o shell" },
     { "exit", "Finaliza o shell" }
 };
@@ -74,6 +75,10 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "cd",
         {{ "cd <path>", "Muda o diretório atual para o caminho especificado. Caminhos com espaços em branco precisam começar e terminar com aspas duplas." }}
+    },
+    {
+        "pwd",
+        {{ "pwd", "Exibe o diretório atual" }}
     }
 };
 
@@ -308,9 +313,13 @@ class Shell {
             } else if ( std::regex_match(path, std::regex("((.*)(\\s*))+")) )
                 Runner::display("Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim do caminho.", 'e');
         }
+
+        // Comando para exibir o atual diretório
+        else if ( std::regex_match(text, std::regex("(\\s*)(pwd)(\\s*)")) )
+            Runner::display(Runner::getCurrentDirectory());
         
         // Quando não é possível obter o comando do texto
-        else Runner::display("Comando não encontrado: " + text, 'e');
+        else Runner::display("Comando inválido: " + text, 'e');
         
     }
 

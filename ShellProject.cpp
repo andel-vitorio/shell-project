@@ -43,10 +43,11 @@ struct CommandArgsDescription {
 
 /// @brief Dicionário contendo pequenas descrições dos comandos disponíveis.
 static std::map<std::string, std::string> helpDictionary = {
-    { "quit", "Finaliza o shell" },
     { "help", "Exibe as informações dos comandos ou de um comando específico" },
-    { "exit", "Finaliza o shell" },
-    { "echo", "Exibe uma mensagem na tela" }
+    { "echo", "Exibe uma mensagem na tela" },
+    { "cd", "Altera o diretório atual" },
+    { "quit", "Finaliza o shell" },
+    { "exit", "Finaliza o shell" }
 };
 
 /// @brief Dicionário contendo descrições completas dos comandos disponíveis.
@@ -69,6 +70,10 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "echo",
         {{ "echo <texto>", "Exibe uma texto na tela" }}
+    },
+    {
+        "cd",
+        {{ "cd <path>", "Muda o diretório atual para o caminho especificado. Caminhos com espaços em branco precisam começar e terminar com aspas duplas." }}
     }
 };
 
@@ -141,6 +146,17 @@ namespace Runner {
     }
 
     /**
+     * Altera o diretório atual para um camingo específico.
+     * 
+     * @param[in] path Caminho de destino
+     * @return Um valor negativo, caso não consiga alterar o diretório atual.
+     *         Caso contrário, a mudança foi realizada com sucesso.
+    */
+    int changeDirectory(const std::string & path) {
+        return chdir(path.c_str());
+    }
+
+    /**
      * Obtém a descrição de um comando específico.
      * 
      * @return A descrição do comando.
@@ -187,7 +203,7 @@ class Shell {
         size_t pos = text.find(command);
 
         if ( pos != std::string::npos )
-            text.erase(pos, 4);
+            text.erase(pos, command.size());
 
         return trim(text);
     }
@@ -260,12 +276,12 @@ class Shell {
         if ( std::regex_match(text, std::regex("(\\s*)(exit|quit)(\\s*)")) )
             isRunning = false;
 
-        // Comando de ajuda
+        // Apresenta a lista de comandos disponíveis
         else if ( std::regex_match(text, std::regex("(\\s*)(help)(\\s*)")) ) {
             Runner::display(getHelpText());
         }
 
-        // Comando de ajuda
+        // Comando de ajuda de um comando específico
         else if ( std::regex_match(text, std::regex("(\\s*)(help)(\\s*)(.*)")) ) {
             std::string cmd = getArgs("help", text);
             Runner::display(Runner::getCommandDescription(cmd));
@@ -275,6 +291,23 @@ class Shell {
         else if ( std::regex_match(text, std::regex("(\\s*)(echo)(\\s*)(.*)")) ) {
             Runner::display(getArgs("echo", text));
         } 
+
+        // Comando de alteração de diretório
+        else if ( std::regex_match(text, std::regex("(\\s*)(cd)(\\s*)(.*)")) ) {
+            std::string path = getArgs("cd", text);
+
+            if ( path == "" ) Runner::display("É necessário especificar o caminho.", 'e');
+            else if ( std::regex_match(path, std::regex("\"(.*)\"")) ) {
+                path = path.substr(1, path.size() - 2);
+                if ( Runner::changeDirectory(path) < 0 ) 
+                    Runner::display("Diretório não encontrado: " + path, 'e');
+            }
+            else if ( std::regex_match(path, std::regex("[^\\s]+")) ) {
+                if ( Runner::changeDirectory(path) < 0 ) 
+                    Runner::display("Diretório não encontrado: " + path, 'e');
+            } else if ( std::regex_match(path, std::regex("((.*)(\\s*))+")) )
+                Runner::display("Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim do caminho.", 'e');
+        }
         
         // Quando não é possível obter o comando do texto
         else Runner::display("Comando não encontrado: " + text, 'e');

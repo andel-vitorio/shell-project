@@ -15,7 +15,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <limits.h>
+#include <limits>
 #include <unistd.h>
 #include <dirent.h>
 #include <sstream>
@@ -59,6 +59,8 @@ static std::map<std::string, std::string> helpDictionary = {
     { "touch", "Gera um arquivo arquivo em branco" },
     { "cp", "Copia o conteúdo de um arquivo em outro arquivo" },
     { "mkdir", "Gera diretórios" },
+    { "rmdir", "Exclui um diretório" },
+    { "rmfile", "Exclui um arquivo" },
     { "quit", "Finaliza o shell" },
     { "exit", "Finaliza o shell" }
 };
@@ -116,6 +118,14 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "mkdir",
         {{ "mkdir <nome_do_diretório> ", "Gera um diretório" }}
+    },
+    {
+        "rmdir",
+        {{ "rmdir <nome_do_diretório> ", "Remove o diretório." }}
+    },
+    {
+        "rmfile",
+        {{ "rmfile /caminho/do/arquivo.ext", "Remove o arquivo no caminho especificado." }}
     }
 };
 
@@ -378,6 +388,66 @@ namespace Runner {
         return EXIT_SUCCESS;
     }
 
+    /**
+     * Exlui um arquivo.
+     * 
+     * @param[in] path Caminho do arquivo
+     * @return status da operação
+    */
+    int removeFile(std::string & path) {
+
+        if ( not (path[0] == '/' or ( path[0] == '.' and path[1] == '/') ) )
+            path = "./" + path;
+
+        if ( !unlink(path.c_str())) return EXIT_SUCCESS;
+        else return EXIT_FAILURE;   
+    }
+
+    /**
+     * Exlui um diretório.
+     * 
+     * @param[in] path Caminho do diretório
+     * @return status da operação
+    */
+    int removeDirectory(std::string & path) {
+
+        if ( not (path[0] == '/' or ( path[0] == '.' and path[1] == '/') ) )
+            path = "./" + path;
+
+
+        auto itens = getItensOfDirectory(path, true);
+
+        // O diretório não está vazio
+        if ( itens.size() > 2 ) {
+
+            struct stat st;
+
+            for ( auto &item: itens ) {
+
+                if ( !strcmp(item->d_name, ".") or !strcmp(item->d_name, "..") )
+                    continue;
+
+                
+                std::string p = path + "/" + item->d_name;
+
+                if ( lstat(p.c_str(), &st) < 0 ) return READ_FAILURE;
+
+                if ( S_ISDIR(st.st_mode) and removeDirectory(p) != EXIT_SUCCESS )
+                    return EXIT_FAILURE;
+
+
+                int status = removeFile(p);
+            
+                if ( status == EXIT_SUCCESS ) continue;
+                else return status;
+            }
+        }
+
+
+        if ( rmdir(path.c_str()) != 0 ) return EXIT_FAILURE;
+        return EXIT_SUCCESS;
+        
+    }
 
     /**
      * Obtém a descrição de um comando específico.
@@ -657,6 +727,71 @@ class Shell {
             
             if ( status == EXIT_FAILURE ) Runner::display("Ocorreu um problema ao criar o diretório!", 'e');
             else Runner::display("Diretório criado com sucesso!");
+        }
+
+        // Comando para remover um diretório
+        else if ( std::regex_match(text, std::regex("(\\s*)(rmdir)(\\s*)(.*)")) ) {
+            std::string path = getArgs("rmdir", text);
+
+            if ( path == "" ) Runner::display("É necessário especificar o nome do diretório.", 'e');
+            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
+                path = path.substr(1, path.size() - 2);
+            else if ( path.find(" ") != std::string::npos ) {
+                Runner::display("Parâmetros inválidos.\n", 'e');
+                Runner::display("OBS: Caminhos com espaços em branco precisam iniciar e findar com aspas duplas.\n");
+                Runner::display("O comando 'rmdir' aceita apenas um único parâmetro.");
+                return;
+            }
+
+            bool isEmpty = Runner::getItensOfDirectory(path, true).size() < 2;
+
+            if ( isEmpty ) {
+                if ( Runner::removeDirectory(path) == EXIT_FAILURE ) {
+                    Runner::display("Ocorreu um problema ao remover o diretório!", 'e');
+                    return;
+                }
+            } else {
+                Runner::display("Este diretório contém arquivos e/ou diretórios. Ao continuar, todos serão removidos.\n");
+                Runner::display("Deseja continuar [s/n]? ");
+                std::string res;
+
+                std::cin >> res;
+
+                // Limpa o buffer de entrada do objeto std::cin
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+                if ( trim(res) == "s" ) {
+                    if ( Runner::removeDirectory(path) == EXIT_FAILURE ) {
+                        Runner::display("Ocorreu um problema ao remover o diretório!", 'e');
+                        return;
+                    }
+                } else {
+                    Runner::display("Diretório não removido!");
+                }
+
+            }
+
+            Runner::display("Diretório removido com sucesso!");
+        }
+
+        // Comando para criar um arquivo em branco
+        else if ( std::regex_match(text, std::regex("(\\s*)(rmfile)(\\s*)(.*)")) ) {
+            std::string path = getArgs("rmfile", text);
+
+            if ( path == "" ) Runner::display("É necessário especificar o nome do arquivo.", 'e');
+            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
+                path = path.substr(1, path.size() - 2);
+            else if ( path.find(" ") != std::string::npos ) {
+                Runner::display("Parâmetros inválidos.\n", 'e');
+                Runner::display("OBS: Caminhos ou nomes de arquivo com espaços em branco precisam iniciar e findar com aspas duplas.\n");
+                Runner::display("O comando 'rmfile' aceita apenas um único parâmetro.");
+                return;
+            }
+
+            int status = Runner::removeFile(path);
+            
+            if ( status  == EXIT_FAILURE ) Runner::display("O arquivo não pode ser removido!", 'e');
+            else Runner::display("Arquivo removido com sucesso!");
         }
         
         // Quando não é possível obter o comando do texto

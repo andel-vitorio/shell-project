@@ -54,6 +54,7 @@ static std::map<std::string, std::string> helpDictionary = {
     { "pwd", "Exibe o diretório atual" },
     { "ls", "Exibe os itens presente no diretório atual" },
     { "cat", "Exibe o conteúdo de um arquivo no shell" },
+    { "touch", "Gera um arquivo arquivo em branco" },
     { "quit", "Finaliza o shell" },
     { "exit", "Finaliza o shell" }
 };
@@ -99,6 +100,10 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "cat",
         {{ "cat <nome_do_arquivo>", "O comando cat permite a visualização do conteúdo de um arquivo" }}
+    },
+    {
+        "touch",
+        {{ "touch <nome_do_arquivo>", "Gera um arquivo em branco com o nome especificado" }}
     }
 };
 
@@ -255,6 +260,24 @@ namespace Runner {
 
         return EXIT_SUCCESS;
     }
+
+     /**
+     * Gera um arquivo em branco com um determinado nome
+     * 
+     * @param[in] filename Nome do arquivo a ser criado
+     * @param[in, out] content String que conterá o conteúdo do arquivo
+     * @return status da operação
+    */
+    int createBlankFile(const std::string & filename) {
+        mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+        int fd = open(filename.c_str(), O_WRONLY | O_CREAT, mode);
+
+        if ( fd < 0 ) return OPEN_FAILURE;
+        close(fd);
+
+        return EXIT_SUCCESS;
+    }
+
 
     /**
      * Obtém a descrição de um comando específico.
@@ -460,6 +483,26 @@ class Shell {
             else if ( status == READ_FAILURE ) Runner::display("Erro ao realizar a leitura do arquivo.", 'e');
             else Runner::display(content);
 
+        }
+
+        // Comando para criar um arquivo em branco
+        else if ( std::regex_match(text, std::regex("(\\s*)(touch)(\\s*)(.*)")) ) {
+            std::string path = getArgs("touch", text);
+
+            if ( path == "" ) Runner::display("É necessário especificar o nome do arquivo.", 'e');
+            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
+                path = path.substr(1, path.size() - 2);
+            else if ( path.find(" ") != std::string::npos ) {
+                Runner::display("Parâmetros inválidos.\n", 'e');
+                Runner::display("OBS: Caminhos ou nomes de arquivo com espaços em branco precisam iniciar e findar com aspas duplas.\n");
+                Runner::display("O comando 'touch' aceita apenas um único parâmetro.");
+                return;
+            }
+
+            int status = Runner::createBlankFile(path);
+            
+            if ( status  == OPEN_FAILURE ) Runner::display("O arquivo não pode ser criado!", 'e');
+            else Runner::display("Arquivo gerado com sucesso!");
         }
         
         // Quando não é possível obter o comando do texto

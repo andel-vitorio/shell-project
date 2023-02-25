@@ -22,7 +22,11 @@
 #include <regex>
 #include <iomanip>
 #include <map>
+#include <fcntl.h>
 
+#define OPEN_FAILURE -1
+#define READ_FAILURE -2
+#define MALLOC_FAILURE -3
 
 // Código de cores ANSI
 static const std::string ANSI_COLOR_RED = "\x1b[31m";
@@ -49,6 +53,7 @@ static std::map<std::string, std::string> helpDictionary = {
     { "cd", "Altera o diretório atual" },
     { "pwd", "Exibe o diretório atual" },
     { "ls", "Exibe os itens presente no diretório atual" },
+    { "cat", "Exibe o conteúdo de um arquivo no shell" },
     { "quit", "Finaliza o shell" },
     { "exit", "Finaliza o shell" }
 };
@@ -90,6 +95,10 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
             {"ls -l", "Exibe os itens não ocultos presentes no diretório atual em forma de lista" },
             {"ls -la", "Exibe todos os itens presentes no diretório atual, inclusive os ocultos, em forma de lista" },
         }
+    },
+    {
+        "cat",
+        {{ "cat <nome_do_arquivo>", "O comando cat permite a visualização do conteúdo de um arquivo" }}
     }
 };
 
@@ -206,6 +215,45 @@ namespace Runner {
         std::sort(dirs.begin(), dirs.end(), cmp);
 
         return dirs;
+    }
+
+    /**
+     * Obtém o conteúdo de um arquivo
+     * 
+     * @param[in] file Caminho do arquivo
+     * @param[in, out] content String que conterá o conteúdo do arquivo
+     * @return status da operação
+    */
+    int getFileContent(const std::string & file, std::string & content) {
+        int fd = open(file.c_str(), O_RDONLY);
+        ssize_t nread, total = 0;
+        char *buffer;
+
+        if ( fd < 0 ) return OPEN_FAILURE;
+
+        off_t fileSize = lseek(fd, 0, SEEK_END);
+        lseek(fd, 0, SEEK_SET);
+
+        // Aloca um buffer do tamanho do arquivo
+        buffer = (char *) malloc(fileSize);
+
+        if ( buffer == nullptr ) return MALLOC_FAILURE;
+
+        // Lê o arquivo em um loop
+        while ( ( nread = read(fd, buffer + total, fileSize - total)) > 0 )
+            total += nread;
+
+        if ( nread < 0 ) return READ_FAILURE;
+
+        if ( buffer[fileSize - 1] == '\n' )
+            buffer[fileSize - 1] = '\0';
+
+        content = buffer;
+
+        free(buffer);
+        close(fd);
+
+        return EXIT_SUCCESS;
     }
 
     /**
@@ -388,6 +436,30 @@ class Shell {
             }
             
             Runner::display(ss.str());
+        }
+
+        // Comando para visualizar o conteúdo de um arquivo
+        else if ( std::regex_match(text, std::regex("(\\s*)(cat)(\\s*)(.*)")) ) {
+            std::string path = getArgs("cat", text);
+
+            if ( path == "" ) Runner::display("É necessário especificar o caminho.", 'e');
+            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
+                path = path.substr(1, path.size() - 2);
+            else if ( path.find(" ") != std::string::npos ) {
+                Runner::display("Parâmetros inválidos.\n", 'e');
+                Runner::display("OBS: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim do caminho.\n");
+                Runner::display("O comando 'cat' não aceita múltilplos parâmetros.");
+                return;
+            }
+
+            std::string content;
+            int status = Runner::getFileContent(path, content);
+            
+            if ( status  == OPEN_FAILURE ) Runner::display("Arquivo não encontrado!", 'e');
+            else if ( status == MALLOC_FAILURE ) Runner::display("Erro ao alocar recursos.", 'e');
+            else if ( status == READ_FAILURE ) Runner::display("Erro ao realizar a leitura do arquivo.", 'e');
+            else Runner::display(content);
+
         }
         
         // Quando não é possível obter o comando do texto

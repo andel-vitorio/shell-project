@@ -23,6 +23,7 @@
 #include <iomanip>
 #include <map>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #define OPEN_FAILURE -1
 #define READ_FAILURE -2
@@ -57,6 +58,7 @@ static std::map<std::string, std::string> helpDictionary = {
     { "cat", "Exibe o conteúdo de um arquivo no shell" },
     { "touch", "Gera um arquivo arquivo em branco" },
     { "cp", "Copia o conteúdo de um arquivo em outro arquivo" },
+    { "mkdir", "Gera diretórios" },
     { "quit", "Finaliza o shell" },
     { "exit", "Finaliza o shell" }
 };
@@ -110,6 +112,10 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "cp",
         {{ "cp <nome_do_arquivo_1> <nome_do_arquivo_2>", "Copia todo o conteúdo do Arquivo 1 no Arquivo 2" }}
+    },
+    {
+        "mkdir",
+        {{ "mkdir <nome_do_diretório> ", "Gera um diretório" }}
     }
 };
 
@@ -347,6 +353,28 @@ namespace Runner {
         if ( s != sourceContent.size() )
             return WRITE_FAILURE;
 
+        return EXIT_SUCCESS;
+    }
+
+    /**
+     * Gera um diretório.
+     * 
+     * @param[in] path Caminho do diretório
+     * @return status da operação
+    */
+    int createDirectory(std::string & path) {
+        std::string p = "./";
+        int status;
+
+        if ( path[0] == '/' or ( path[0] == '.' and path[1] == '/' ) )
+            p = "";
+
+        for ( auto &str: split(path, '/') ) {
+            p += str + "/";
+            status = mkdir(p.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
+        }
+
+        if ( status < 0 ) return EXIT_FAILURE;
         return EXIT_SUCCESS;
     }
 
@@ -605,10 +633,30 @@ class Shell {
             int status = Runner::copyContentFile(paths[0], paths[1]);
             
             if ( status  == OPEN_FAILURE ) Runner::display("O arquivo de origem não pode ser encontrado!", 'e');
-            else if ( status  == READ_FAILURE) Runner::display("O arquivo de origem não pode ser lido!", 'e');
+            else if ( status  == READ_FAILURE ) Runner::display("O arquivo de origem não pode ser lido!", 'e');
             else if ( status == MALLOC_FAILURE ) Runner::display("Erro ao alocar recursos.", 'e');
             else if ( status  == WRITE_FAILURE) Runner::display("O arquivo de destino não pode escrito!", 'e');
             else Runner::display("Conteúdo copiado com sucesso!");
+        }
+
+        // Comando para criar um diretório
+        else if ( std::regex_match(text, std::regex("(\\s*)(mkdir)(\\s*)(.*)")) ) {
+            std::string path = getArgs("mkdir", text);
+
+            if ( path == "" ) Runner::display("É necessário especificar o nome do diretório.", 'e');
+            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
+                path = path.substr(1, path.size() - 2);
+            else if ( path.find(" ") != std::string::npos ) {
+                Runner::display("Parâmetros inválidos.\n", 'e');
+                Runner::display("OBS: Caminhos com espaços em branco precisam iniciar e findar com aspas duplas.\n");
+                Runner::display("O comando 'mkdir' aceita apenas um único parâmetro.");
+                return;
+            }
+
+            int status = Runner::createDirectory(path);
+            
+            if ( status == EXIT_FAILURE ) Runner::display("Ocorreu um problema ao criar o diretório!", 'e');
+            else Runner::display("Diretório criado com sucesso!");
         }
         
         // Quando não é possível obter o comando do texto

@@ -27,6 +27,7 @@
 #define OPEN_FAILURE -1
 #define READ_FAILURE -2
 #define MALLOC_FAILURE -3
+#define WRITE_FAILURE -4
 
 // Código de cores ANSI
 static const std::string ANSI_COLOR_RED = "\x1b[31m";
@@ -55,6 +56,7 @@ static std::map<std::string, std::string> helpDictionary = {
     { "ls", "Exibe os itens presente no diretório atual" },
     { "cat", "Exibe o conteúdo de um arquivo no shell" },
     { "touch", "Gera um arquivo arquivo em branco" },
+    { "cp", "Copia o conteúdo de um arquivo em outro arquivo" },
     { "quit", "Finaliza o shell" },
     { "exit", "Finaliza o shell" }
 };
@@ -104,6 +106,10 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "touch",
         {{ "touch <nome_do_arquivo>", "Gera um arquivo em branco com o nome especificado" }}
+    },
+    {
+        "cp",
+        {{ "cp <nome_do_arquivo_1> <nome_do_arquivo_2>", "Copia todo o conteúdo do Arquivo 1 no Arquivo 2" }}
     }
 };
 
@@ -124,6 +130,47 @@ std::string trim(const std::string & str) {
     const auto len = end - begin + 1;
     
     return str.substr(begin, len);
+}
+
+/**
+ * Obtém as substrings de um string delimitadas por um determinado caracter.
+ * 
+ * @param[in] str String a ser processada
+ * @param[in] character O caracter delimitador
+ * @return Um lista de substrings.
+*/
+std::vector<std::string> getSubstrings(const std::string & str, const char & character) {
+    std::vector<std::string> substrings;
+    size_t start = 0;
+    size_t end;
+
+    while ( ( start = str.find(character, start) ) != std::string::npos ) {
+        end = str.find(character, start + 1);
+        
+        if (end == std::string::npos)
+            break;
+
+        substrings.push_back(str.substr(start + 1, end - start - 1));
+        start = end + 1;
+    }
+
+
+    return substrings;
+}
+
+std::vector<std::string> split(const std::string & str, const char & character) {
+    std::vector<std::string> substrings;
+    size_t start = 0;
+    size_t end;
+
+    while ( ( end = str.find(character, start)) != std::string::npos ) {
+        if ( end != start ) substrings.push_back(str.substr(start, end - start));
+        start = end + 1;
+    }
+
+    substrings.push_back(str.substr(start));
+    
+    return substrings;
 }
 
 /**
@@ -265,7 +312,6 @@ namespace Runner {
      * Gera um arquivo em branco com um determinado nome
      * 
      * @param[in] filename Nome do arquivo a ser criado
-     * @param[in, out] content String que conterá o conteúdo do arquivo
      * @return status da operação
     */
     int createBlankFile(const std::string & filename) {
@@ -274,6 +320,32 @@ namespace Runner {
 
         if ( fd < 0 ) return OPEN_FAILURE;
         close(fd);
+
+        return EXIT_SUCCESS;
+    }
+
+     /**
+     * Copia o conteúdo de um arquivo em outro arquivo.
+     * 
+     * @param[in] source Arquivo de origem
+     * @param[in] target Arquivo de destino
+     * @return status da operação
+    */
+    int copyContentFile(const std::string & source, const std::string & target) {
+        std::string sourceContent;
+        
+        int status =  getFileContent(source, sourceContent);
+
+        if ( status < 0 ) return status;
+
+        mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+        int fd = open(target.c_str(), O_WRONLY | O_CREAT, mode);
+
+        ssize_t s = write(fd, sourceContent.c_str(), sourceContent.size());
+        close(fd);
+
+        if ( s != sourceContent.size() )
+            return WRITE_FAILURE;
 
         return EXIT_SUCCESS;
     }
@@ -503,6 +575,40 @@ class Shell {
             
             if ( status  == OPEN_FAILURE ) Runner::display("O arquivo não pode ser criado!", 'e');
             else Runner::display("Arquivo gerado com sucesso!");
+        }
+
+        // Comando para criar um arquivo em branco
+        else if ( std::regex_match(text, std::regex("(\\s*)(cp)(\\s*)(.*)")) ) {
+            std::string args = getArgs("cp", text);
+            std::vector<std::string> paths;
+
+            if ( args == "" ) {
+                Runner::display("É necessário especificar os nomes dos arquivos.", 'e');
+                return;
+            }
+            else if ( std::regex_match(args, std::regex("(\"(.*)\")(\\s)+((\"(.*)\"))")) )
+                paths = getSubstrings(args, '"');
+            else if ( std::regex_match(args, std::regex("([^\\s]+)(\\s)+([^\\s]+)")) )
+                paths = split(args, ' ');
+            else {
+                Runner::display("Parâmetros inválidos.\n", 'e');
+                Runner::display("OBS: Caminhos ou nomes de arquivo com espaços em branco precisam iniciar e findar com aspas duplas.\n");
+                Runner::display("O comando 'cp' aceita apenas dois únicos parâmetros.");
+                return;
+            }
+
+            if ( paths.empty() ) {
+                Runner::display("É necessário especificar os nomes dos arquivos.", 'e');
+                return;
+            }
+
+            int status = Runner::copyContentFile(paths[0], paths[1]);
+            
+            if ( status  == OPEN_FAILURE ) Runner::display("O arquivo de origem não pode ser encontrado!", 'e');
+            else if ( status  == READ_FAILURE) Runner::display("O arquivo de origem não pode ser lido!", 'e');
+            else if ( status == MALLOC_FAILURE ) Runner::display("Erro ao alocar recursos.", 'e');
+            else if ( status  == WRITE_FAILURE) Runner::display("O arquivo de destino não pode escrito!", 'e');
+            else Runner::display("Conteúdo copiado com sucesso!");
         }
         
         // Quando não é possível obter o comando do texto

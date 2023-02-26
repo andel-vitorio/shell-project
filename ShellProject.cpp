@@ -29,6 +29,8 @@
 #define READ_FAILURE -2
 #define MALLOC_FAILURE -3
 #define WRITE_FAILURE -4
+#define FILE_FAILURE -5
+#define SAME_FILE -6
 
 // Código de cores ANSI
 static const std::string ANSI_COLOR_RED = "\x1b[31m";
@@ -36,6 +38,7 @@ static const std::string ANSI_COLOR_GREEN = "\x1b[32m";
 static const std::string ANSI_COLOR_CYAN = "\x1b[36m";
 static const std::string ANSI_COLOR_WHITE = "\x1b[37m";
 static const std::string ANSI_COLOR_RESET = "\x1b[0m";
+static const std::string CLEAR_CODE = "\033[2J\033[1;1H";
 
 
 struct CommandArgsDescription {
@@ -52,6 +55,7 @@ struct CommandArgsDescription {
 static std::map<std::string, std::string> helpDictionary = {
     { "help", "Exibe as informações dos comandos ou de um comando específico" },
     { "echo", "Exibe uma mensagem na tela" },
+    { "clear", "Limpar a tela do shell" },
     { "cd", "Altera o diretório atual" },
     { "pwd", "Exibe o diretório atual" },
     { "ls", "Exibe os itens presente no diretório atual" },
@@ -61,6 +65,7 @@ static std::map<std::string, std::string> helpDictionary = {
     { "mkdir", "Gera diretórios" },
     { "rmdir", "Exclui um diretório" },
     { "rmfile", "Exclui um arquivo" },
+    { "mv", "Move ou renomeia um arquivo ou diretório" },
     { "quit", "Finaliza o shell" },
     { "exit", "Finaliza o shell" }
 };
@@ -85,6 +90,10 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "echo",
         {{ "echo <texto>", "Exibe uma texto na tela" }}
+    },
+    {
+        "clear",
+        {{ "clear", "Limpa a tela do shell" }}
     },
     {
         "cd",
@@ -126,6 +135,10 @@ static std::map<std::string, std::vector<CommandArgsDescription>> cmdArgsDescrip
     {
         "rmfile",
         {{ "rmfile /caminho/do/arquivo.ext", "Remove o arquivo no caminho especificado." }}
+    },
+    {
+        "rmfile",
+        {{ "mv <caminho/de/origem> <caminho/de/detino>", "Move ou renomeia um arquivo ou diretorio." }}
     }
 };
 
@@ -226,6 +239,14 @@ namespace Runner {
         if ( mode == 'n') std::cout << ANSI_COLOR_RESET << text;
         else if ( mode == 'e' ) std::cout << ANSI_COLOR_RED << "ERROR: " << text;
         
+        fflush(stdout);
+    }
+
+    /**
+     * Limpa a tela do shell.
+    */
+    void clear() {
+        std::cout << CLEAR_CODE;      
         fflush(stdout);
     }
 
@@ -450,6 +471,56 @@ namespace Runner {
     }
 
     /**
+     * Move ou renomeia arquivos e diretórios.
+     * 
+     * @param[in] source Diretório ou arquivo de origem
+     * @param[in] target Diretório ou arquivo de destino
+     * @return status da operação
+    */
+    int moveFiles( std::string & source, const std::string & target ) {
+
+        // Verifica se a origem existe
+        struct stat source_sb;
+        
+        if ( stat(source.c_str(), &source_sb) == -1 ) 
+            return FILE_FAILURE;
+    
+        // Verifica se a origem e o destino são o mesmo arquivo
+        struct stat target_sb;
+        
+        if ( stat(target.c_str(), &target_sb) != -1 && target_sb.st_ino == source_sb.st_ino ) 
+            return SAME_FILE;
+
+        // Verifica se o destino já existe
+        if ( stat(target.c_str(), &target_sb) != -1 ) {
+
+            if ( S_ISDIR(target_sb.st_mode) ) {
+
+                // O destino é um diretório, adiciona o nome do arquivo à pasta
+                const char *filename = strrchr(source.c_str(), '/');
+
+                if ( !filename ) filename = source.c_str();
+                else filename++;
+
+                char targetPath[ source.size() + strlen(filename) + 2];
+
+                sprintf(targetPath, "%s/%s", target.c_str(), filename);
+
+                if ( rename(source.c_str(), targetPath) == -1 ) 
+                    return EXIT_FAILURE;
+
+            } else if ( rename(source.c_str(), target.c_str()) == -1 )
+                return EXIT_FAILURE;
+        } else {
+            // O destino não existe, renomeia o arquivo
+            if ( rename(source.c_str(), target.c_str()) == -1 )
+                return EXIT_FAILURE;
+        }
+
+        return EXIT_SUCCESS;
+    }
+
+    /**
      * Obtém a descrição de um comando específico.
      * 
      * @return A descrição do comando.
@@ -500,6 +571,31 @@ class Shell {
 
         return trim(text);
     }
+
+    /**
+     * Obtém o caminho no formato ./caminho/qualquer.
+     * 
+     * @param[in] path O caminho a ser convertido.
+     * @return status da operação. 
+    */
+    int getPath(std::string & arg) {
+        if ( arg == "" ) return -1;
+
+        if ( std::regex_match(arg, std::regex("\"(.*)\"")) )
+            arg = arg.substr(1, arg.size() - 2);
+        else if ( arg.find(" ") != std::string::npos ) return -2;
+        
+        if ( not (arg[0] == '/' or ( arg[0] == '.' and arg[1] == '/') ) )
+            arg = "./" + arg;
+
+        std::string home = getenv("HOME");
+        int pos = arg.find("./~");
+
+        if ( pos != std::string::npos )
+            arg.replace(pos, 3, home);
+
+        return 0;
+    }
     
     public: 
 
@@ -513,11 +609,14 @@ class Shell {
     Shell() {
         isRunning = true;
 
+        Runner::clear();
         Runner::display (
             ANSI_COLOR_RESET + 
             "Bem vindo ao Shell Project!\n" +
             "Digite \"exit\" ou \"quit\" para sair."
         );
+        
+        Runner::display(getHelpText());
     }
 
     std::string getHelpText() {
@@ -526,9 +625,13 @@ class Shell {
         ss << "Para obter mais informações sobre um comando específico, ";
         ss << "digite: help <nome_do_comando>.\n\n";
 
+        int i = 1;
+
         for ( auto it = helpDictionary.begin(); it != helpDictionary.end(); ++it ) {
+            ss << std::left << std::setw(4) << i << " ";
             ss << std::left << std::setw(16);
             ss << it->first << it->second << '\n';
+            i++;
         }
 
         return ss.str();
@@ -539,9 +642,16 @@ class Shell {
      * Mostra a linha de comando para o usuário.
     */
     void showCommandLine(void) {
+        std::string current = Runner::getCurrentDirectory();
+        std::string home = getenv("HOME");
+        int pos = current.find(home);
+
+        if ( pos != std::string::npos )
+            current.replace(pos, home.size(), "~");
+
         Runner::display(
             ANSI_COLOR_CYAN + "\n\n" + Runner::getCurrentUser() + "@" + Runner::getHostname() + " " +
-            ANSI_COLOR_GREEN + Runner::getCurrentDirectory() + "  " +
+            ANSI_COLOR_GREEN + current + "  " +
             ANSI_COLOR_WHITE + "$ "
         );
     }
@@ -585,21 +695,28 @@ class Shell {
             Runner::display(getArgs("echo", text));
         } 
 
+        // Comando para limpar a tela do shell
+        else if ( std::regex_match(text, std::regex("(\\s*)(clear)(\\s*)(.*)")) ) {
+            Runner::clear();
+        } 
+
         // Comando de alteração de diretório
         else if ( std::regex_match(text, std::regex("(\\s*)(cd)(\\s*)(.*)")) ) {
-            std::string path = getArgs("cd", text);
+            std::string arg = getArgs("cd", text);
+            int status = getPath(arg);
 
-            if ( path == "" ) Runner::display("É necessário especificar o caminho.", 'e');
-            else if ( std::regex_match(path, std::regex("\"(.*)\"")) ) {
-                path = path.substr(1, path.size() - 2);
-                if ( Runner::changeDirectory(path) < 0 ) 
-                    Runner::display("Diretório não encontrado: " + path, 'e');
+            if ( status == -1 ) {
+                Runner::display("É necessário especificar o diretório de destino.", 'e');
+                return;
+            } else if ( status == -2 ) {
+                Runner::display("Diretório de destino inválido.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas um parâmetro.");
+                return;
             }
-            else if ( std::regex_match(path, std::regex("[^\\s]+")) ) {
-                if ( Runner::changeDirectory(path) < 0 ) 
-                    Runner::display("Diretório não encontrado: " + path, 'e');
-            } else if ( std::regex_match(path, std::regex("((.*)(\\s*))+")) )
-                Runner::display("Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim do caminho.", 'e');
+
+            if ( Runner::changeDirectory(arg) < 0 ) 
+                Runner::display("Diretório não encontrado: " + arg, 'e');
         }
 
         // Comando para exibir o atual diretório
@@ -623,32 +740,37 @@ class Shell {
             for (dirent * d: Runner::getItensOfDirectory(Runner::getCurrentDirectory(), a))
                 ss << d->d_name << (l ?'\n' :'\t');
 
-            if ( ss.str().empty() ) {
-                if (errno == ENOENT) Runner::display("Diretório não encontrado!", 'e');
-                else Runner::display("Leitura do diretório não permitida!", 'e');
+            if (errno == ENOENT) {
+                Runner::display("Diretório não encontrado!", 'e');
+                return;
             }
-            
+        
             Runner::display(ss.str());
         }
 
         // Comando para visualizar o conteúdo de um arquivo
         else if ( std::regex_match(text, std::regex("(\\s*)(cat)(\\s*)(.*)")) ) {
-            std::string path = getArgs("cat", text);
+            std::string arg = getArgs("cat", text);
+            int status = getPath(arg);
 
-            if ( path == "" ) Runner::display("É necessário especificar o caminho.", 'e');
-            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
-                path = path.substr(1, path.size() - 2);
-            else if ( path.find(" ") != std::string::npos ) {
-                Runner::display("Parâmetros inválidos.\n", 'e');
-                Runner::display("OBS: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim do caminho.\n");
-                Runner::display("O comando 'cat' não aceita múltilplos parâmetros.");
+            if ( status == -1 ) {
+                Runner::display("É necessário especificar o caminho correto do arquivo.", 'e');
+                return;
+            } else if ( status == -2 ) {
+                Runner::display("Diretório de destino inválido.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas um parâmetro.");
                 return;
             }
 
             std::string content;
-            int status = Runner::getFileContent(path, content);
+            status = Runner::getFileContent(arg, content);
             
-            if ( status  == OPEN_FAILURE ) Runner::display("Arquivo não encontrado!", 'e');
+            if ( status  == OPEN_FAILURE ) {
+                Runner::display("Arquivo não encontrado: " + arg + "\n", 'e');
+                Runner::display("OBS 1: Verifique se o caminho para o arquivo está correto.\n");
+                Runner::display("OBS 2: É necessário informar a extensão do arquivo.\n");
+            }
             else if ( status == MALLOC_FAILURE ) Runner::display("Erro ao alocar recursos.", 'e');
             else if ( status == READ_FAILURE ) Runner::display("Erro ao realizar a leitura do arquivo.", 'e');
             else Runner::display(content);
@@ -657,19 +779,20 @@ class Shell {
 
         // Comando para criar um arquivo em branco
         else if ( std::regex_match(text, std::regex("(\\s*)(touch)(\\s*)(.*)")) ) {
-            std::string path = getArgs("touch", text);
+            std::string arg = getArgs("touch", text);
+            int status = getPath(arg);
 
-            if ( path == "" ) Runner::display("É necessário especificar o nome do arquivo.", 'e');
-            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
-                path = path.substr(1, path.size() - 2);
-            else if ( path.find(" ") != std::string::npos ) {
-                Runner::display("Parâmetros inválidos.\n", 'e');
-                Runner::display("OBS: Caminhos ou nomes de arquivo com espaços em branco precisam iniciar e findar com aspas duplas.\n");
-                Runner::display("O comando 'touch' aceita apenas um único parâmetro.");
+            if ( status == -1 ) {
+                Runner::display("É necessário especificar o caminho correto do arquivo.", 'e');
+                return;
+            } else if ( status == -2 ) {
+                Runner::display("Diretório de destino inválido.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas um parâmetro.");
                 return;
             }
 
-            int status = Runner::createBlankFile(path);
+            status = Runner::createBlankFile(arg);
             
             if ( status  == OPEN_FAILURE ) Runner::display("O arquivo não pode ser criado!", 'e');
             else Runner::display("Arquivo gerado com sucesso!");
@@ -680,18 +803,14 @@ class Shell {
             std::string args = getArgs("cp", text);
             std::vector<std::string> paths;
 
-            if ( args == "" ) {
-                Runner::display("É necessário especificar os nomes dos arquivos.", 'e');
-                return;
-            }
-            else if ( std::regex_match(args, std::regex("(\"(.*)\")(\\s)+((\"(.*)\"))")) )
+            if ( std::regex_match(args, std::regex("(\"(.*)\")(\\s)+((\"(.*)\"))")) )
                 paths = getSubstrings(args, '"');
             else if ( std::regex_match(args, std::regex("([^\\s]+)(\\s)+([^\\s]+)")) )
                 paths = split(args, ' ');
             else {
                 Runner::display("Parâmetros inválidos.\n", 'e');
-                Runner::display("OBS: Caminhos ou nomes de arquivo com espaços em branco precisam iniciar e findar com aspas duplas.\n");
-                Runner::display("O comando 'cp' aceita apenas dois únicos parâmetros.");
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas dois parâmetro.");
                 return;
             }
 
@@ -700,8 +819,20 @@ class Shell {
                 return;
             }
 
-            int status = Runner::copyContentFile(paths[0], paths[1]);
+            int s1 = getPath(paths[0]), s2 = getPath(paths[1]);
+
+            if ( s1 == -1 or s2 == -1 ) {
+                Runner::display("É necessário especificar o caminho correto do arquivo.", 'e');
+                return;
+            } else if ( s1 == -2 or s2 == -2 ) {
+                Runner::display("Diretório de destino inválido.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas dois parâmetro.");
+                return;
+            }
             
+            int status = Runner::copyContentFile(paths[0], paths[1]);
+           
             if ( status  == OPEN_FAILURE ) Runner::display("O arquivo de origem não pode ser encontrado!", 'e');
             else if ( status  == READ_FAILURE ) Runner::display("O arquivo de origem não pode ser lido!", 'e');
             else if ( status == MALLOC_FAILURE ) Runner::display("Erro ao alocar recursos.", 'e');
@@ -711,19 +842,20 @@ class Shell {
 
         // Comando para criar um diretório
         else if ( std::regex_match(text, std::regex("(\\s*)(mkdir)(\\s*)(.*)")) ) {
-            std::string path = getArgs("mkdir", text);
+            std::string arg = getArgs("mkdir", text);
+            int status = getPath(arg);
 
-            if ( path == "" ) Runner::display("É necessário especificar o nome do diretório.", 'e');
-            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
-                path = path.substr(1, path.size() - 2);
-            else if ( path.find(" ") != std::string::npos ) {
-                Runner::display("Parâmetros inválidos.\n", 'e');
-                Runner::display("OBS: Caminhos com espaços em branco precisam iniciar e findar com aspas duplas.\n");
-                Runner::display("O comando 'mkdir' aceita apenas um único parâmetro.");
+            if ( status == -1 ) {
+                Runner::display("É necessário especificar o caminho correto do arquivo.", 'e');
+                return;
+            } else if ( status == -2 ) {
+                Runner::display("Diretório de destino inválido.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas um parâmetro.");
                 return;
             }
 
-            int status = Runner::createDirectory(path);
+            status = Runner::createDirectory(arg);
             
             if ( status == EXIT_FAILURE ) Runner::display("Ocorreu um problema ao criar o diretório!", 'e');
             else Runner::display("Diretório criado com sucesso!");
@@ -731,22 +863,23 @@ class Shell {
 
         // Comando para remover um diretório
         else if ( std::regex_match(text, std::regex("(\\s*)(rmdir)(\\s*)(.*)")) ) {
-            std::string path = getArgs("rmdir", text);
+            std::string arg = getArgs("rmdir", text);
+            int status = getPath(arg);
 
-            if ( path == "" ) Runner::display("É necessário especificar o nome do diretório.", 'e');
-            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
-                path = path.substr(1, path.size() - 2);
-            else if ( path.find(" ") != std::string::npos ) {
-                Runner::display("Parâmetros inválidos.\n", 'e');
-                Runner::display("OBS: Caminhos com espaços em branco precisam iniciar e findar com aspas duplas.\n");
-                Runner::display("O comando 'rmdir' aceita apenas um único parâmetro.");
+            if ( status == -1 ) {
+                Runner::display("É necessário especificar o caminho correto do arquivo.", 'e');
+                return;
+            } else if ( status == -2 ) {
+                Runner::display("Diretório de destino inválido.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas um parâmetro.");
                 return;
             }
 
-            bool isEmpty = Runner::getItensOfDirectory(path, true).size() < 2;
+            bool isEmpty = Runner::getItensOfDirectory(arg, true).size() <= 2;
 
             if ( isEmpty ) {
-                if ( Runner::removeDirectory(path) == EXIT_FAILURE ) {
+                if ( Runner::removeDirectory(arg) == EXIT_FAILURE ) {
                     Runner::display("Ocorreu um problema ao remover o diretório!", 'e');
                     return;
                 }
@@ -761,7 +894,7 @@ class Shell {
                 std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
                 if ( trim(res) == "s" ) {
-                    if ( Runner::removeDirectory(path) == EXIT_FAILURE ) {
+                    if ( Runner::removeDirectory(arg) == EXIT_FAILURE ) {
                         Runner::display("Ocorreu um problema ao remover o diretório!", 'e');
                         return;
                     }
@@ -776,22 +909,66 @@ class Shell {
 
         // Comando para criar um arquivo em branco
         else if ( std::regex_match(text, std::regex("(\\s*)(rmfile)(\\s*)(.*)")) ) {
-            std::string path = getArgs("rmfile", text);
+            std::string arg = getArgs("rmfile", text);
+            int status = getPath(arg);
 
-            if ( path == "" ) Runner::display("É necessário especificar o nome do arquivo.", 'e');
-            else if ( std::regex_match(path, std::regex("\"(.*)\"")) )
-                path = path.substr(1, path.size() - 2);
-            else if ( path.find(" ") != std::string::npos ) {
-                Runner::display("Parâmetros inválidos.\n", 'e');
-                Runner::display("OBS: Caminhos ou nomes de arquivo com espaços em branco precisam iniciar e findar com aspas duplas.\n");
-                Runner::display("O comando 'rmfile' aceita apenas um único parâmetro.");
+            if ( status == -1 ) {
+                Runner::display("É necessário especificar o caminho correto do arquivo.", 'e');
+                return;
+            } else if ( status == -2 ) {
+                Runner::display("Diretório de destino inválido.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas um parâmetro.");
                 return;
             }
 
-            int status = Runner::removeFile(path);
+            status = Runner::removeFile(arg);
             
             if ( status  == EXIT_FAILURE ) Runner::display("O arquivo não pode ser removido!", 'e');
             else Runner::display("Arquivo removido com sucesso!");
+        }
+
+        // Move arquivos
+        else if ( std::regex_match(text, std::regex("(\\s*)(mv)(\\s*)(.*)")) ) {
+            std::string args = getArgs("mv", text);
+            std::vector<std::string> paths;
+
+            if ( std::regex_match(args, std::regex("(\"(.*)\")(\\s)+((\"(.*)\"))")) )
+                paths = getSubstrings(args, '"');
+            else if ( std::regex_match(args, std::regex("([^\\s]+)(\\s)+([^\\s]+)")) )
+                paths = split(args, ' ');
+            else {
+                Runner::display("Parâmetros inválidos.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas dois parâmetro.");
+                return;
+            }
+
+            if ( paths.empty() ) {
+                Runner::display("É necessário especificar os nomes dos arquivos.", 'e');
+                return;
+            }
+
+            int s1 = getPath(paths[0]), s2 = getPath(paths[1]);
+
+            if ( s1 == -1 or s2 == -1 ) {
+                Runner::display("É necessário especificar o caminho correto do arquivo.", 'e');
+                return;
+            } else if ( s1 == -2 or s2 == -2 ) {
+                Runner::display("Diretório de destino inválido.\n", 'e');
+                Runner::display("OBS 1: Caminhos com espaços em branco precisam utilizar aspas duplas no início e no fim.\n");
+                Runner::display("OBS 2: Este comando aceita apenas dois parâmetro.");
+                return;
+            }
+
+            int status = Runner::moveFiles(paths[0], paths[1]);
+            
+            if ( status  == OPEN_FAILURE ) Runner::display("O arquivo de origem não pode ser encontrado!", 'e');
+            else if ( status  == READ_FAILURE ) Runner::display("O arquivo de origem não pode ser lido!", 'e');
+            else if ( status == MALLOC_FAILURE ) Runner::display("Erro ao alocar recursos.", 'e');
+            else if ( status  == WRITE_FAILURE) Runner::display("O arquivo não pode ser movido!", 'e');
+            else if ( status  == EXIT_FAILURE) Runner::display("O arquivo não pode ser movido!", 'e');
+            else Runner::display("Arquivo movido com sucesso!");
         }
         
         // Quando não é possível obter o comando do texto
